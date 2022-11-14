@@ -1,0 +1,18 @@
+{
+  "name": "p2pnetwork",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Benedict Kohler",
+  "license": "ISC",
+  "dependencies": {
+    "crypto": "^1.0.1",
+    "mysql": "^2.18.1",
+    "net": "^1.0.2",
+    "sync-mysql": "^3.0.1",
+    "sync-sql": "^1.0.2"
+  }
+}
