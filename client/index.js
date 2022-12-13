@@ -26,6 +26,7 @@ node.start();
 createAddressMapping(dbConnection, Account.address, ip, port);
 
 process.stdin.on('data', (data) => {
+  Account = getAccount(dbConnection, password);
   const input = data.toString().trim().split(" ");
   if (input[0] === 'options') displayOptions();
   else if (input[0] === 'account') displayAccount();
@@ -34,16 +35,10 @@ process.stdin.on('data', (data) => {
   else if (input[0] === 'createChannel') node.createChannel(input[1], Number(input[2]));
   else if (input[0] === 'acceptChannel') node.acceptChannel(input[1], Number(input[2]));
   else if (input[0] === 'createCommitment') {
-    if (node.createCommitment(input[1], Number(input[2]))) {
-      updateAccount(dbConnection, Account.address, Account.password, Account.balance - Number(input[2]));
-      Account = getAccount(dbConnection, Account.password);
-    }
+    if (node.createCommitment(input[1], Number(input[2]))) updateAccount(dbConnection, Account.address, Account.password, Account.balance - Number(input[2]));
   }
   else if (input[0] === 'acceptCommitment') {
-    if (node.acceptCommitment(input[1])) {
-      updateAccount(dbConnection, Account.address, Account.password, Account.balance + Number(input[2]));
-      Account = getAccount(dbConnection, Account.password);
-    }
+    if (node.acceptCommitment(input[1])) updateAccount(dbConnection, Account.address, Account.password, Account.balance + Number(input[2]));
   }
   else if (input[0] === 'displayCommitments') displayCommitments(input[1]);
   else if (input[0] === 'publishCommitment') node.publishCommitment(input[1]);
@@ -51,6 +46,7 @@ process.stdin.on('data', (data) => {
   else if (input[0] === 'revokePublishedCommitment') node.revokeCommitment(input[1]);
   else if (input[0] === 'networkGraph') displayNetworkGraph(input[1], input[2], Number(input[3]));
   else if (input[0] === 'nextHops') displayNextHops(input[1], input[2], Number(input[3]));
+  else if (input[0] === 'makePayment') node.attemptPayment(input[1], Number(input[2]), Number(input[3]));
 });
 
 const displayOptions = () => {
@@ -66,7 +62,8 @@ const displayOptions = () => {
   console.log('approvePublishedCommitment COMMITMENTID - cooperatively resolves commitment published by peer');
   console.log('revokePublishedCommitment COMMITMENTID - attempt to steal peers funds to penalize them');
   console.log('networkGraph STARTADDRESS ENDADDRESS DEPTH - create and display a graph between addresses');
-  console.log('nextHops STARTADDRESS ENDADDRESS DEPTH - get peers from which we can reach desired address\n');
+  console.log('nextHops STARTADDRESS ENDADDRESS DEPTH - get peers from which we can reach desired address');
+  console.log('makePayment ADDRESS AMOUNT DEPTH - tries to make a payment utilizing the lightning network\n');
 }
 
 const connectedPeers = () => {

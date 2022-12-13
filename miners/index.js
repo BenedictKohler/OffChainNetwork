@@ -1,4 +1,4 @@
-const { getFundingTransactions, deleteFundingTransaction, addTransactionToChain, getCommitmentRevocations, getCommitmentTransaction, incrementAccountBalance, deleteCommitmentTransactions, deleteCommitmentRevocation, getPublishedCommitments, deleteTransactionKeys, deletePeer } = require('../database');
+const { getFundingTransactions, deleteFundingTransaction, addTransactionToChain, getCommitmentRevocations, getCommitmentTransaction, incrementAccountBalance, deleteCommitmentTransactions, deleteCommitmentRevocation, getPublishedCommitments, deleteTransactionKeys, deletePeer, getHTLContracts, deleteHTLContract, deleteHTLCKey } = require('../database');
 const mysql = require('sync-mysql');
 const { generateId, verifySecret } = require('../utils/key');
 
@@ -13,6 +13,17 @@ const dbConnection = new mysql({
 
 setInterval(() => { processFundingTransactions() }, 30000);
 setInterval(() => { processPublishedCommitments() }, 20000);
+setInterval(() => { deleteExpiredHTLContracts() }, 60000);
+
+const deleteExpiredHTLContracts = () => {
+  const htlContracts = getHTLContracts(dbConnection);
+  for (let htlContract of htlContracts) {
+    if (Math.round(Date.now() / 1000) > htlContract.timelock) {
+      deleteHTLContract(dbConnection, htlContract.routeId, htlContract.ownerAddress, htlContract.counterpartyAddress);
+      deleteHTLCKey(dbConnection, htlContract.routeId);
+    }
+  }
+}
 
 const processFundingTransactions = () => {
     const pendingFundingTransactions = getFundingTransactions(dbConnection);

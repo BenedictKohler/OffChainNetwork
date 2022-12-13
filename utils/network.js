@@ -1,5 +1,45 @@
 const { getPeers, getLatestCommitmentTransaction } = require("../database");
 
+const getNextExpirationDuration = (currentExpiration) => {
+    const SECONDS = 1000;
+    return (currentExpiration - 45) * SECONDS - Date.now();
+}
+
+const getInitialExpirationDuration = (hops) => {
+    const SECONDS = 1000;
+    return hops * 60 * SECONDS;
+}
+
+const getOptimalPeer = (connection, startAddress, endAddress, amount, depth) => {
+    const graph = createGraph(connection, startAddress, endAddress, depth);
+    if (graph === null) return undefined;
+    var visited = new Map();
+    visited.set(startAddress, 1e12);
+    var queue = [];
+    for (let edgeStr of graph.get(startAddress)) {
+        let edge = edgeStr.split(' ');
+        queue.push({firstNode: edge[0], currNode: edge[0], capacity: Number(edge[1])});
+    }
+
+    var optimalPeer = { address: '', capacity: 0 };
+    while (queue.length > 0) {
+        const obj = queue.shift();
+        if (obj.currNode === endAddress) {
+            if (optimalPeer.capacity < obj.capacity) optimalPeer = { address: obj.firstNode, capacity: obj.capacity };
+            if (optimalPeer.capacity >= amount) break;
+            else continue;
+        }
+        else if (visited.has(obj.currNode) && obj.capacity <= visited.get(obj.currNode)) continue;
+        visited.set(obj.currNode, obj.capacity);
+        for (let edgeStr of graph.get(obj.currNode)) {
+            let edge = edgeStr.split(' ');
+            queue.push({firstNode: obj.firstNode, currNode: edge[0], capacity: Math.min(obj.capacity, Number(edge[1]))});
+        }
+    }
+
+    return optimalPeer;
+}
+
 const getPossibleNextHops = (connection, startAddress, endAddress, depth) => {
     const graph = createGraph(connection, startAddress, endAddress, depth);
     return graph === null ? new Set() : graph.get(startAddress);
@@ -95,4 +135,4 @@ const displayGraph = (graph, startAddress, endAddress) => {
     console.log();
 }
 
-module.exports = { getPossibleNextHops, createGraph, buildGraph, condenseGraph, displayGraph };
+module.exports = { getPossibleNextHops, getInitialExpirationDuration, getNextExpirationDuration, createGraph, buildGraph, condenseGraph, displayGraph, getOptimalPeer };

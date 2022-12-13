@@ -2,6 +2,10 @@ const getAccount = (connection, password) => {
     return connection.query('select address, password, balance from Account where password = ?', [password])[0];
 };
 
+const getAccountByAddress = (connection, address) => {
+    return connection.query('select address, password, balance from Account where address = ?', [address])[0];
+}
+
 const getPeers = (connection, address) => {
     return connection.query('select address1 as address from Peer where address2 = ? union select address2 as address from Peer where address1 = ?', [address, address]);
 }
@@ -12,6 +16,10 @@ const getOnlinePeers = (connection, address) => {
 
 const getOnlineAccount = (connection, address) => {
     return connection.query('select address, ip, port from AddressMapping where address = ?', [address])[0];
+}
+
+const deleteHTLContract = (connection, routeId, ownerAddress, counterpartyAddress) => {
+    return connection.query('delete from HTLContract where routeId = ? and ownerAddress = ? and counterpartyAddress = ?', [routeId, ownerAddress, counterpartyAddress]);
 }
 
 const createAddressMapping = (connection, address, ip, port) => {
@@ -68,12 +76,24 @@ const getLatestCommitmentTransaction = (connection, ownerAddress, counterpartyAd
     return connection.query('select * from CommitmentTransaction where ownerAddress = ? and counterpartyAddress = ? order by dateAdded desc limit 1', [ownerAddress, counterpartyAddress])[0];
 }
 
+const createHTLContract = (connection, ownerAddress, counterpartyAddress, destinationAddress, routeId, amount, signatureHash, duration, hopDepth) => {
+    return connection.query('insert into HTLContract (routeId, ownerAddress, counterpartyAddress, destinationAddress, amount, timelock, signatureHash, hopDepth) values (?, ?, ?, ?, ?, ?, ?, ?)', [routeId, ownerAddress, counterpartyAddress, destinationAddress, amount, Math.round((Date.now() + duration) / 1000), signatureHash, hopDepth]);
+}
+
+const signHTLContract = (connection, routeId, counterpartyAddress, signature) => {
+    return connection.query('update HTLContract set signature = ? where routeId = ? and counterpartyAddress = ?', [signature, routeId, counterpartyAddress]);
+}
+
 const getTransactionKey = (connection, transactionId, keyType, ownerAddress) => {
     return connection.query('select * from TransactionKey where transactionId = ? and keyType = ? and ownerAddress = ?', [transactionId, keyType, ownerAddress])[0];
 }
 
 const updateAccount = (connection, address, password, balance) => {
     return connection.query('update Account set address = ?, password = ?, balance = ? where address = ?', [address, password, balance, address]);
+}
+
+const getHTLContract = (connection, routeId, ownerAddress) => {
+    return connection.query('select * from HTLContract where routeId = ? and ownerAddress = ?', [routeId, ownerAddress])[0];
 }
 
 const incrementAccountBalance = (connection, address, amount) => {
@@ -118,4 +138,28 @@ const getPublishedCommitments = (connection) => {
     return connection.query('select * from CommitmentTransaction where datePublished is not null');
 }
 
-module.exports = { getAccount, deletePeer, deleteTransactionKeys, getPublishedCommitments, deleteCommitmentRevocation, incrementAccountBalance, deleteCommitmentTransactions, getCommitmentRevocations, addCommitmentRevocation, getPeers, signCommitmentTransaction, getCommitments, getCommitmentTransaction, updateAccount, getTransactionKey, getLatestCommitmentTransaction, getFundingTransactions, deleteFundingTransaction, addTransactionToChain, addPeer, createAddressMapping, deleteAddressMapping, getOnlinePeers, getOnlineAccount, getFundingTransaction, addFundingTransaction, updateFundingTransaction, addTransactionKey, addCommitmentTransaction };
+const getHTLContracts = (connection) => {
+    return connection.query('select * from HTLContract');
+}
+
+const createHTLCKey = (connection, routeId, ownerAddress, amount, htlcKey) => {
+    return connection.query('insert into HTLCKey (routeId, ownerAddress, amount, htlcKey) values (?, ?, ?, ?)', [routeId, ownerAddress, amount, htlcKey]);
+}
+
+const getHTLCKey = (connection, routeId) => {
+    return connection.query('select * from HTLCKey where routeId = ?', [routeId])[0];
+}
+
+const deleteHTLCKey = (connection, routeId) => {
+    return connection.query('delete from HTLCKey where routeId = ?', [routeId]);
+}
+
+const getSignedHTLContracts = (connection, ownerAddress) => {
+    return connection.query('select * from HTLContract where ownerAddress = ? and signature is not null', [ownerAddress]);
+}
+
+const getUnsignedHTLContracts = (connection, counterpartyAddress) => {
+    return connection.query('select * from HTLContract where counterpartyAddress = ? and signature is null', [counterpartyAddress]);
+}
+
+module.exports = { getAccount, deleteHTLCKey, getHTLContract, getUnsignedHTLContracts, getHTLContracts, deleteHTLContract, getAccountByAddress, getSignedHTLContracts, createHTLCKey, getHTLCKey, createHTLContract, signHTLContract, deletePeer, deleteTransactionKeys, getPublishedCommitments, deleteCommitmentRevocation, incrementAccountBalance, deleteCommitmentTransactions, getCommitmentRevocations, addCommitmentRevocation, getPeers, signCommitmentTransaction, getCommitments, getCommitmentTransaction, updateAccount, getTransactionKey, getLatestCommitmentTransaction, getFundingTransactions, deleteFundingTransaction, addTransactionToChain, addPeer, createAddressMapping, deleteAddressMapping, getOnlinePeers, getOnlineAccount, getFundingTransaction, addFundingTransaction, updateFundingTransaction, addTransactionKey, addCommitmentTransaction };

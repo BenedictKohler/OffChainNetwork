@@ -1,6 +1,7 @@
 const net = require('net');
-const { getOnlinePeers, signCommitmentTransaction, getCommitmentTransaction, getOnlineAccount, getLatestCommitmentTransaction, getTransactionKey, addCommitmentTransaction, getFundingTransaction, addPeer, addTransactionKey, updateFundingTransaction, addFundingTransaction, addCommitmentRevocation } = require('../database');
-const { generateSecret, hashSecret, generateId } = require('../utils/key');
+const { getOnlinePeers, signCommitmentTransaction, getCommitmentTransaction, getOnlineAccount, getLatestCommitmentTransaction, getTransactionKey, addCommitmentTransaction, getFundingTransaction, addPeer, addTransactionKey, updateFundingTransaction, addFundingTransaction, addCommitmentRevocation, createHTLContract, getSignedHTLContracts, getAccountByAddress, getUnsignedHTLContracts, updateAccount, signHTLContract, getHTLCKey, deleteHTLCKey, createHTLCKey, deleteHTLContract, getHTLContracts, getHTLContract } = require('../database');
+const { generateSecret, hashSecret, generateId, verifySecret } = require('../utils/key');
+const { getOptimalPeer, getInitialExpirationDuration, getNextExpirationDuration } = require('../utils/network');
 
 module.exports = (dbConnection, address, ip, port) => {
 
@@ -13,23 +14,77 @@ module.exports = (dbConnection, address, ip, port) => {
   server.on('connection', (incomingSocket) => {
     incomingSocket.on('data', (data) => {
       const message = data.toString().split(' ');
+      messages.set(message[1], { incomingSocket: incomingSocket, message: message });
       // Peer is wanting to create a channel with us
       if (message[0] === 'createChannel') console.log(`createChannel ${message[1]} ${message[2]}\n`);
-      // Peer is wanting to create a new commitment (pay us)
       else if (message[0] === 'createCommitment') console.log(`createCommitment ${message[1]} ${message[2]}\n`);
       else if (message[0] === 'publishCommitment') console.log(`Commitment Transaction with Id ${message[2]} was published by Account ${message[1]}\n`);
-      messages.set(message[1], { incomingSocket: incomingSocket, message: message });
+      else if (message[0] === 'initiateMultistepPayment') initiateMultistepPayment(message[1]);
     });
   });
 
   // If a previously connected peer comes back online then connect to it
   setInterval(() => { syncPeers() }, 30000);
 
+  // Update payment channel commitments when a HTLC signature occurs
+  setInterval(() => { checkHTLCSignatures() }, 15000);
+
+  // Forwards HTLC's on if need be
+  setInterval(() => { checkNewHTLContracts() }, 10000);
+
+  const checkNewHTLContracts = () => {
+    const unsignedHTLContracts = getUnsignedHTLContracts(dbConnection, address);
+    for (let htlContract of unsignedHTLContracts) {
+      if (htlContract.destinationAddress === address) {
+        const htlcKeyObj = getHTLCKey(dbConnection, htlContract.routeId);
+        if (htlcKeyObj && htlcKeyObj.amount === htlContract.amount) {
+          signHTLContract(dbConnection, htlContract.routeId, address, htlcKeyObj.htlcKey);
+          deleteHTLCKey(dbConnection, htlcKeyObj.routeId);
+        }
+      }
+      else {
+        // Make sure that we haven't already created the next HTLC in the chain
+        const nextHtlContract = getHTLContract(dbConnection, htlContract.routeId, address);
+        if (!nextHtlContract) {
+          // Get the peer that's part of the route with maximal capacity
+          const optimalPeer = getOptimalPeer(dbConnection, address, htlContract.destinationAddress, htlContract.amount, htlContract.hopDepth - 1);
+          if (optimalPeer) createHTLContract(dbConnection, address, optimalPeer.address, htlContract.destinationAddress, htlContract.routeId, Math.min(htlContract.amount, optimalPeer.capacity), htlContract.signatureHash, getNextExpirationDuration(htlContract.timelock), htlContract.hopDepth - 1);
+        }
+      }
+    }
+  }
+
+  const checkHTLCSignatures = () => {
+    const signedHTLContracts = getSignedHTLContracts(dbConnection, address);
+    for (let htlContract of signedHTLContracts) {
+      if (verifySecret(htlContract.signature, htlContract.signatureHash) && createCommitment(htlContract.counterpartyAddress, htlContract.amount)) {
+        // After successfully paying the counterparty we update account balances
+        const Account = getAccountByAddress(dbConnection, address);
+        const counterpartyAccount = getAccountByAddress(dbConnection, htlContract.counterpartyAddress);
+        updateAccount(dbConnection, address, Account.password, Account.balance - htlContract.amount);
+        updateAccount(dbConnection, counterpartyAccount.address, counterpartyAccount.password, counterpartyAccount.balance + htlContract.amount);
+        // We now sign the previous HTLC in the chain so that we can be compensated (this will do nothing in the case that we're the Account initiating the payment)
+        signHTLContract(dbConnection, htlContract.routeId, address, htlContract.signature);
+        deleteHTLContract(dbConnection, htlContract.routeId, address, htlContract.counterpartyAddress);
+      }
+    }
+  }
+
   // Checks if previous peers have rejoined the network
   const syncPeers = () => {
     const onlinePeers = getOnlinePeers(dbConnection, address);
     connectedPeers.clear();
     for (let peer of onlinePeers) connectedPeers.set(peer.address, { ip: peer.ip, port: peer.port });
+  }
+
+  const initiateMultistepPayment = (peerAddress) => {
+    const { incomingSocket, message } = messages.get(peerAddress);
+    messages.delete(peerAddress);
+    const htlcKey = generateSecret(16);
+    const signatureHash = hashSecret(htlcKey);
+    incomingSocket.write(`signatureHash ${signatureHash}`);
+    createHTLCKey(dbConnection, message[3], address, Number(message[2]), htlcKey);
+    incomingSocket.destroy();
   }
 
   const acceptChannel = (peerAddress, amount) => {
@@ -93,7 +148,7 @@ module.exports = (dbConnection, address, ip, port) => {
       console.log(err);
     }
   }
-  
+
   const acceptCommitment = (peerAddress) => {
     const { incomingSocket, message } = messages.get(peerAddress);
     messages.delete(peerAddress);
@@ -245,6 +300,52 @@ module.exports = (dbConnection, address, ip, port) => {
     addTransactionKey(dbConnection, id, 'public', counterpartySignature, ownerAddress);
   }
 
+  const attemptPayment = (destinationAddress, amount, depth) => {
+    // Check whether there exists a direct payment channel already
+    const latestCommitment = getLatestCommitmentTransaction(dbConnection, address, destinationAddress);
+    if (latestCommitment && amount <= latestCommitment.ownerAmount) {
+      console.log(`Please pay ${destinationAddress} directly using createCommitment since a sufficient channel already exists!\n`);
+      return;
+    }
+    // Get the peer that's part of the route with maximal capacity
+    const optimalPeer = getOptimalPeer(dbConnection, address, destinationAddress, amount, depth);
+    if (!optimalPeer) {
+      console.log(`There does not exist a valid payment route to ${destinationAddress}! Consider making a direct channel.\n`);
+      return;
+    }
+    if (amount > optimalPeer.capacity) console.log(`Attempting to process a payment of size ${optimalPeer.capacity} since ${amount} is too large!\n`);
+    else console.log(`Making payment of amount ${amount} to ${destinationAddress}.\n`);
+    // Get the signature hash from the account you're wanting to pay
+    const onlineAccount = getOnlineAccount(dbConnection, destinationAddress);
+    if (!onlineAccount) {
+      console.log(`The account ${destinationAddress} is offline so can't initiate the multistep transaction!\n`);
+      return;
+    }
+    try {
+      const outgoingSocket = createConnection(onlineAccount);
+      const routeId = generateId(8);
+      outgoingSocket.on('connect', () => {
+        outgoingSocket.write(`initiateMultistepPayment ${address} ${amount} ${routeId}`);
+      });
+      outgoingSocket.on('data', (data) => {
+        const message = data.toString().split(' ');
+        if (message[0] === 'signatureHash') {
+          createHTLContract(dbConnection, address, optimalPeer.address, destinationAddress, routeId, amount, message[1], getInitialExpirationDuration(depth), depth);
+          outgoingSocket.destroy();
+        }
+        else {
+          outgoingSocket.destroy();
+          console.log(`Failed to communicate with the account ${destinationAddress}\n`);
+          return;
+        }
+      });
+    }
+    catch (err) {
+      console.log(err);
+      return;
+    }
+  }
+
   // Creates a connection in order to exchange data with an account
   const createConnection = (account) => {
     const outgoingSocket = new net.Socket();
@@ -264,7 +365,7 @@ module.exports = (dbConnection, address, ip, port) => {
     connectedPeers: () => connectedPeers.keys(),
     start, stop, createChannel, acceptChannel,
     createCommitment, acceptCommitment, publishCommitment,
-    approveCommitment, revokeCommitment
+    approveCommitment, revokeCommitment, attemptPayment
   };
 };
 
